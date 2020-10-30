@@ -1,6 +1,6 @@
 Manifest-Version: 1.0
-Bnd-LastModified: 1603889932942
-Build-Jdk: 11.0.8
+Bnd-LastModified: 1604068134956
+Build-Jdk: 11.0.9
 Built-By: jin
 Bundle-Description: ONOS OSGi bundle archetype
 Bundle-ManifestVersion: 2
@@ -32,9 +32,11 @@ Require-Capability: osgi.extender;filter:="(&(osgi.extender=osgi.compone
  nfig.NetworkConfigRegistry)";effective:=active,osgi.service;filter:="(o
  bjectClass=org.onosproject.net.flowobjective.FlowObjectiveService)";eff
  ective:=active,osgi.service;filter:="(objectClass=org.onosproject.net.h
- ost.HostService)";effective:=active,osgi.service;filter:="(objectClass=
- org.onosproject.net.packet.PacketService)";effective:=active,osgi.servi
- ce;filter:="(objectClass=org.onosproject.net.topology.TopologyService)"
- ;effective:=active,osgi.ee;filter:="(&(osgi.ee=JavaSE)(version=1.8))"
+ ost.HostProviderRegistry)";effective:=active,osgi.service;filter:="(obj
+ ectClass=org.onosproject.net.host.HostService)";effective:=active,osgi.
+ service;filter:="(objectClass=org.onosproject.net.packet.PacketService)
+ ";effective:=active,osgi.service;filter:="(objectClass=org.onosproject.
+ net.topology.TopologyService)";effective:=active,osgi.ee;filter:="(&(os
+ gi.ee=JavaSE)(version=1.8))"
 Service-Component: OSGI-INF/nctu.winlab.unicastdhcp.AppComponent.xml
 Tool: Bnd-3.5.0.201709291849

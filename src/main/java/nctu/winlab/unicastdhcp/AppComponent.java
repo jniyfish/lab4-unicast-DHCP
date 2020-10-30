@@ -75,6 +75,12 @@ import org.onosproject.net.config.NetworkConfigListener;
 import org.onosproject.net.config.NetworkConfigRegistry;
 import org.onosproject.net.packet.DefaultOutboundPacket;
 import java.util.Set;
+import java.util.List;
+import java.util.LinkedList;
+import java.util.LinkedHashSet;
+import org.onosproject.net.host.HostProvider;
+import org.onosproject.net.host.HostProviderRegistry;
+import org.onosproject.net.host.HostProviderService;
 
 import static org.onosproject.net.config.NetworkConfigEvent.Type.CONFIG_ADDED;
 import static org.onosproject.net.config.NetworkConfigEvent.Type.CONFIG_UPDATED;
@@ -106,32 +112,35 @@ public class AppComponent implements SomeInterface {
 
     @Reference(cardinality = ReferenceCardinality.MANDATORY)
     protected NetworkConfigRegistry cfgService2;
-  
     @Reference(cardinality = ReferenceCardinality.MANDATORY)
     protected CoreService coreService;
-
     @Reference(cardinality = ReferenceCardinality.MANDATORY)
     protected ComponentConfigService cfgService;
-
     @Reference(cardinality = ReferenceCardinality.MANDATORY)
     protected PacketService packetService;
-
     @Reference(cardinality = ReferenceCardinality.MANDATORY)
     protected TopologyService topologyService;
-
     @Reference(cardinality = ReferenceCardinality.MANDATORY)
     protected FlowObjectiveService flowObjectiveService;
-
     @Reference(cardinality = ReferenceCardinality.MANDATORY)
     protected HostService hostService;
+    @Reference(cardinality = ReferenceCardinality.MANDATORY)
+    protected HostProviderRegistry hostProviderRegistry;
+
+    protected HostProviderService hostProviderService;
+
     /** Some configurable property. */
     private String someProperty;
-    private  PacketProcessor processor ;
+    private PacketProcessor processor ;
     private String server;
     private ConnectPoint serverCp;
+    private MacAddress serverMac;
+    private DeviceId serverId;
     private ApplicationId appId;
     private Map<MacAddress,ConnectPoint> macTables 
             = Maps.newConcurrentMap();
+    private Set<Host> hostSet = new LinkedHashSet<Host>();;
+
 
     @Activate
     protected void activate() {
@@ -175,7 +184,9 @@ public class AppComponent implements SomeInterface {
             if (config != null) {
               log.info("DHCP server is at {}", config.name());
               server = config.name();
-              serverCp = serverCp.deviceConnectPoint(server);
+              serverCp = serverPoint(server);
+              serverId = serverCp.deviceId();
+
             }
           }
         }
@@ -193,12 +204,13 @@ public class AppComponent implements SomeInterface {
 
         selectorServer = DefaultTrafficSelector.builder()
         .matchEthType(Ethernet.TYPE_IPV4);
-packetService.requestPackets(selectorServer.build(), PacketPriority.CONTROL, appId);
+        packetService.requestPackets(selectorServer.build(), PacketPriority.CONTROL, appId);
     }
     private class ReactivePacketProcessor implements PacketProcessor {
 
         @Override
         public void process(PacketContext context) {
+
                 if (context.isHandled()) {
                     return;
                 }   
@@ -207,86 +219,57 @@ packetService.requestPackets(selectorServer.build(), PacketPriority.CONTROL, app
                 if (ethPkt == null) {
                     return;
                 }
-                
-                
+                ConnectPoint lastPort= pkt.receivedFrom();
+
                 if(ethPkt.getDestinationMAC().toString().equals("FF:FF:FF:FF:FF:FF") ){
-                    log.info("fuck1");
-                    macTables.put(ethPkt.getSourceMAC(),pkt.receivedFrom());
-                    TrafficTreatment.Builder builder = DefaultTrafficTreatment.builder();
-                    builder.setOutput(serverCp.port());
-                    packetService.emit(
-                        new DefaultOutboundPacket(
-                            serverCp.deviceId(),
-                            builder.build(), 
-                            pkt.unparsed()
-                            )
-                        );
-                }
-                else{
-                    log.info("fuck2");
-                    Path path = calculatePath(context);
-                    if (path == null) {
-                        flood(context);
-                        return;
+                    Path path = calculatePath(context,1);
+                    List<Link> linkSet = path.links();
+                    //packetOut(context, path.src().port());
+                    for(int i=0;i<linkSet.size();i++){
+                        Link l = linkSet.get(i);
+                        installRule(l.src(),lastPort);
+                        installRule(lastPort,l.src());
+                        lastPort = l.dst();
                     }
-                    installRule(context, path.src().port());
-                /*    ConnectPoint cp = macTables.get(ethPkt.getDestinationMAC());
-                    TrafficTreatment.Builder builder = DefaultTrafficTreatment.builder();
-                    builder.setOutput(cp.port());
-                    packetService.emit(
-                        new DefaultOutboundPacket(
-                            cp.deviceId(),
-                            builder.build(), 
-                            pkt.unparsed()
-                            )
-                        );*/
+                    installRule(serverCp,lastPort);
+                    installRule(lastPort,serverCp);
                 }
+
             }
     }
     private void packetOut(PacketContext context, PortNumber portNumber) {
         context.treatmentBuilder().setOutput(portNumber);
         context.send();
     }
-    private Path calculatePath(PacketContext context) {
+    private Path calculatePath(PacketContext context,int flag) {
         InboundPacket inPkt = context.inPacket();
         Ethernet ethPkt = inPkt.parsed();
 
-        HostId dstId = HostId.hostId(ethPkt.getDestinationMAC());
-        Host dst = hostService.getHost(dstId);
-        
+        DeviceId dstId;
+
+        if(flag==1){
+            dstId = serverId;
+        }
         Set<Path> paths = topologyService.getPaths(topologyService.currentTopology(), inPkt.receivedFrom().deviceId(),
-                dst.location().deviceId());
+                serverId);
         if (paths.isEmpty()) {
-            log.info("Path is empty when calculate Path");
             return null;
         }
-
         Path path = pickForwardPathIfPossible(paths, inPkt.receivedFrom().port());
         if (path == null) {
-            log.warn("Don't know where to go from here {} for {} -> {}", inPkt.receivedFrom(), ethPkt.getSourceMAC(),
-                    ethPkt.getDestinationMAC());
+            log.info("No path");
             return null;
         } else {
             return path;
         }
     }
-    private void installRule(PacketContext context, PortNumber portNumber) {
-        log.info("222222222222222222222222222222222222222222222222222222222222222222");
-        Ethernet inPkt = context.inPacket().parsed();
+    private void installRule(ConnectPoint src,ConnectPoint lastPort) {
         TrafficSelector.Builder selectorBuilder = DefaultTrafficSelector.builder();
+        selectorBuilder.matchInPort(lastPort.port());
+        selectorBuilder.matchEthType(Ethernet.TYPE_IPV4);
 
-        log.info("3333333333333333333333333333333333333333333333333333333333333333333333333333333333333");
-        selectorBuilder.matchInPort(context.inPacket().receivedFrom().port());
-
-        if (inPkt.getEtherType() == Ethernet.TYPE_IPV4) {
-            selectorBuilder.matchEthType(Ethernet.TYPE_IPV4);
-        }
-        else if (inPkt.getEtherType() == Ethernet.TYPE_ARP) {
-            selectorBuilder.matchEthType(Ethernet.TYPE_ARP);
-        }
-        log.info("44444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444");
         TrafficTreatment.Builder treatmentBuilder = DefaultTrafficTreatment.builder();
-        treatmentBuilder.setOutput(portNumber);
+        treatmentBuilder.setOutput(src.port());
 
         ForwardingObjective forwardingObjective = DefaultForwardingObjective.builder()
                 .withSelector(selectorBuilder.build())
@@ -297,9 +280,8 @@ packetService.requestPackets(selectorServer.build(), PacketPriority.CONTROL, app
                 .makeTemporary(flowTimeout)
                 .add();
 
-        flowObjectiveService.forward(context.inPacket().receivedFrom().deviceId(), forwardingObjective);
+        flowObjectiveService.forward(src.deviceId(), forwardingObjective);
 
-        packetOut(context, portNumber);
     }
 
     private Path pickForwardPathIfPossible(Set<Path> paths, PortNumber notToPort) {
@@ -312,12 +294,11 @@ packetService.requestPackets(selectorServer.build(), PacketPriority.CONTROL, app
         }
         return lastPath;
     }
-    private void flood(PacketContext context) {
-        if (topologyService.isBroadcastPoint(topologyService.currentTopology(), context.inPacket().receivedFrom())) {
-            packetOut(context, PortNumber.FLOOD);
-        } else {
-            context.block();
-        }
+    private static ConnectPoint serverPoint(String string) {
+        int idx = string.lastIndexOf("/");
+        String id = string.substring(0, idx);
+        String cp = string.substring(idx + 1);
+        return new ConnectPoint(DeviceId.deviceId(id), PortNumber.portNumber(cp));
     }
 
 }
